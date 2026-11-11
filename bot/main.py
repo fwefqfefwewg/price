@@ -10,7 +10,7 @@ from datetime import timedelta
 from .autosources import hub_urls, normalize_candidate, score_link
 from .config import load
 from .db import DB, now
-from .detector import evaluate, evaluate_listing
+from .detector import CONF_RANK, evaluate, evaluate_listing
 from .notifier import Notifier
 from .parsing import STORES, canonical_url, clean_source_url, store_key
 from .scheduling import interval_factor, next_interval
@@ -110,7 +110,8 @@ class App:
             verdict = evaluate(parsed.price, hist, p.threshold or cfg.drop_threshold,
                                p.max_price, cfg.min_history)
             anomaly = verdict.alert
-            notify = verdict.alert and await self._confirm(p, parsed.price)
+            ok_conf = CONF_RANK[verdict.confidence] >= CONF_RANK[cfg.min_confidence]
+            notify = verdict.alert and ok_conf and await self._confirm(p, parsed.price)
 
             self.db.record_price(p.id, parsed.price, parsed.currency, anomaly)
             if anomaly and self.db.anomaly_streak(p.id) >= cfg.baseline_after:
@@ -121,7 +122,9 @@ class App:
                 sent = await self.notifier.send_alert(
                     url=p.url, name=parsed.name or p.name, price=parsed.price,
                     currency=parsed.currency or p.currency, ref=verdict.ref,
-                    drop=verdict.drop, image=parsed.image, reason=verdict.reason)
+                    drop=verdict.drop, image=parsed.image, reason=verdict.reason,
+                    seller=parsed.seller, confidence=verdict.confidence,
+                    samples=verdict.samples)
                 if sent:
                     self.db.record_alert(p.id, parsed.price)
                 log.info("ALERTE %s -> %s (réf %s)", parsed.name[:50], parsed.price, verdict.ref)
@@ -185,7 +188,8 @@ class App:
                 self.db.record_listing(url, it.price, it.old_price, v.alert)
                 if v.alert and self.db.listing_streak(url) >= cfg.baseline_after:
                     self.db.listing_accept(url)          # baisse durable = nouveau prix normal
-                elif v.alert and not self.db.discovery_recent(url, cfg.alert_cooldown):
+                elif (v.alert and CONF_RANK[v.confidence] >= CONF_RANK[cfg.min_confidence]
+                      and not self.db.discovery_recent(url, cfg.alert_cooldown)):
                     cands.append((v.drop or 0, url, it, v))
             self.db.commit()
 
@@ -214,7 +218,8 @@ class App:
         sent = await self.notifier.send_alert(
             url=url, name=parsed.name or it.name, price=parsed.price,
             currency=parsed.currency or it.currency, ref=v.ref, drop=drop,
-            image=parsed.image or it.image, reason=v.reason, discovered=True)
+            image=parsed.image or it.image, reason=v.reason, discovered=True,
+            seller=parsed.seller, confidence=v.confidence, samples=v.samples)
         if sent:
             self.db.record_discovery(url, parsed.price)
         log.info("DÉCOUVERTE %s -> %s (réf %s)", (parsed.name or url)[:50], parsed.price, v.ref)

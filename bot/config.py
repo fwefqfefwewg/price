@@ -82,6 +82,7 @@ class Config:
     auto_min_items: int        # produits minimum pour qu'une page soit retenue
     auto_refresh: int          # secondes entre deux explorations
     proxy_sites: frozenset     # boutiques qui passent par le proxy (vide = toutes)
+    min_confidence: str        # low / medium / high : fiabilité minimale pour alerter
 
 
 def load() -> Config:
@@ -92,6 +93,7 @@ def load() -> Config:
     raw_ids = (_env("ADMIN_IDS", "") or "").replace(" ", "").split(",")
     ids = {int(x) for x in raw_ids if x}
     guild = _env("DISCORD_GUILD_ID")
+    conf_min = (_env("MIN_CONFIDENCE", "low") or "low").lower()
     return Config(
         webhook=webhook,
         admin_webhook=_env("ADMIN_WEBHOOK"),
@@ -130,6 +132,7 @@ def load() -> Config:
         auto_max_sources=int(_env("AUTO_MAX_SOURCES", "8")),
         auto_min_items=int(_env("AUTO_MIN_ITEMS", "15")),
         auto_refresh=int(float(_env("AUTO_REFRESH_HOURS", "12")) * 3600),
+        min_confidence=conf_min if conf_min in ("low", "medium", "high") else "low",
         proxy_sites=frozenset(
             store_key(t) for t in (_env("PROXY_SITES", "") or "").replace(",", " ").split()),
     )

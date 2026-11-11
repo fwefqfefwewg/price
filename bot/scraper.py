@@ -13,6 +13,7 @@ from playwright.async_api import async_playwright
 
 from .config import Config
 from .parsing import (
+    DEFAULT_SELECTORS,
     LINK_PATTERNS,
     SELECTORS,
     Item,
@@ -48,6 +49,7 @@ JS_GRAB = """(sel) => {
     h1: (document.querySelector('h1') || {}).innerText || null,
     title: document.title,
     sel_price: text(sel.price), sel_title: text(sel.title), sel_img: img(sel.img),
+    sel_seller: text(sel.seller),
     text: (document.body ? document.body.innerText : '').slice(0, 4000),
   };
 }"""
@@ -203,7 +205,9 @@ class Scraper:
             timezone_id="Europe/Paris",
             viewport={"width": 1366, "height": 850},
             args=["--no-sandbox", "--disable-dev-shm-usage",
-                  "--disable-blink-features=AutomationControlled"],
+                  "--disable-blink-features=AutomationControlled",
+                  # le cache reste hors du volume (petit) : seuls cookies et profil y sont gardés
+                  "--disk-cache-dir=/tmp/chromium-cache", "--disk-cache-size=52428800"],
         )
         if use_proxy:
             opts["proxy"] = self.cfg.proxy
@@ -356,7 +360,7 @@ class Scraper:
         page = await self._new_page(key)
         try:
             await self._goto(page, url)
-            sel = SELECTORS.get(key, {})
+            sel = SELECTORS.get(key, DEFAULT_SELECTORS)
             try:     # dès que le prix est là, on lit : pas d'attente fixe
                 await page.wait_for_function(JS_READY, arg=sel,
                                              timeout=self.cfg.ready_timeout * 1000)

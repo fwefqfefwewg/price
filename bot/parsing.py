@@ -12,6 +12,21 @@ STORES = {
     "aliexpress": "AliExpress",
     "alibaba": "Alibaba",
     "jumia": "Jumia",
+    "fnac": "Fnac",
+    "boulanger": "Boulanger",
+    "ldlc": "LDLC",
+    "carrefour": "Carrefour",
+    "ebay": "eBay",
+    "walmart": "Walmart",
+    "bestbuy": "Best Buy",
+    "temu": "Temu",
+    "noon": "Noon",
+    "takealot": "Takealot",
+}
+STORE_FLAGS = {
+    "aliexpress": "🇨🇳", "alibaba": "🇨🇳", "cdiscount": "🇫🇷", "fnac": "🇫🇷", "boulanger": "🇫🇷",
+    "ldlc": "🇫🇷", "carrefour": "🇫🇷", "walmart": "🇺🇸", "bestbuy": "🇺🇸", "temu": "🌐",
+    "noon": "🌍", "takealot": "🇿🇦",
 }
 TLD_FLAGS = {"fr": "🇫🇷", "com": "🇺🇸", "de": "🇩🇪", "es": "🇪🇸", "it": "🇮🇹", "uk": "🇬🇧",
              "nl": "🇳🇱", "be": "🇧🇪",
@@ -26,6 +41,7 @@ SELECTORS = {
                   "#priceblock_dealprice", "#priceblock_ourprice"],
         "title": ["#productTitle"],
         "img": ["#landingImage"],
+        "seller": ["#sellerProfileTriggerId", "#merchant-info a"],
     },
     "aliexpress": {
         "price": ["[class*='price-default--current']", "[class*='product-price-current']",
@@ -58,7 +74,20 @@ LINK_PATTERNS = {
     "aliexpress": r"/item/\d+\.html",
     "alibaba": r"/product-detail/[^/?#]+\.html",
     "jumia": r"/[^/?#]+-\d{5,}\.html",
+    "fnac": r"/(?:a|mp)\d{5,}",
+    "boulanger": r"/ref/\d+",
+    "ldlc": r"/fiche/[A-Za-z]{2}\d+\.html",
+    "ebay": r"/itm/(?:[^/?#]+/)?\d{9,}",
+    "walmart": r"/ip/(?:[^/?#]+/)?\d{5,}",
+    "bestbuy": r"/site/[^?#]+/\d+\.p",
+    "temu": r"-g-\d+\.html",
+    "noon": r"/N\d+[A-Z]?/p",
+    "takealot": r"/PLID\d+",
+    "carrefour": r"/p/[^/?#]+-\d{8,}",
 }
+
+# Boutiques sans sélecteurs dédiés : JSON-LD / meta en priorité, puis le microdata standard.
+DEFAULT_SELECTORS = {"price": ["[itemprop='price']"], "title": ["h1"], "img": []}
 
 BLOCK_HINTS = (
     "captcha", "saisissez les caractères", "enter the characters you see", "robot check",
@@ -74,6 +103,7 @@ class Parsed:
     currency: str | None = None
     image: str | None = None
     in_stock: bool = True
+    seller: str | None = None
 
 
 def store_key(url: str) -> str:
@@ -89,10 +119,8 @@ def store_label(url: str) -> tuple[str, str]:
     key = store_key(url)
     name = STORES.get(key, key)
     host = urlparse(url).netloc.lower()
-    if key in ("aliexpress", "alibaba"):
-        return name, "🇨🇳"
-    if key == "cdiscount":
-        return name, "🇫🇷"
+    if key in STORE_FLAGS:
+        return name, STORE_FLAGS[key]
     flag = TLD_FLAGS.get(host.rsplit(".", 1)[-1], "")
     return name, flag
 
@@ -142,6 +170,15 @@ def to_float(x) -> float | None:
         return None
 
 
+def is_placeholder_price(v: float | None) -> bool:
+    """Prix factices (9999, 99 999, 9999,99...) affichés pour un produit indisponible, sur
+    demande ou vendu par un tiers : ils ne doivent jamais servir de prix de référence."""
+    if v is None:
+        return False
+    integer = f"{v:.2f}".split(".")[0]
+    return len(integer) >= 4 and set(integer) == {"9"}
+
+
 def guess_currency(text: str | None) -> str | None:
     if not text:
         return None
@@ -149,7 +186,8 @@ def guess_currency(text: str | None) -> str | None:
                      ("₦", "NGN"), ("NGN", "NGN"), ("KSh", "KES"), ("Ksh", "KES"),
                      ("KES", "KES"), ("EGP", "EGP"), ("E£", "EGP"), ("MAD", "MAD"),
                      ("Dhs", "MAD"), ("DH", "MAD"), ("GH₵", "GHS"), ("GHS", "GHS"),
-                     ("FCFA", "XOF"), ("XOF", "XOF"),
+                     ("FCFA", "XOF"), ("XOF", "XOF"), ("AED", "AED"), ("SAR", "SAR"),
+                     ("ZAR", "ZAR"), ("CAD", "CAD"), ("AUD", "AUD"), ("CHF", "CHF"),
                      ("US", "USD"), ("$", "USD"), ("USD", "USD")):
         if sym in text:
             return cur
@@ -170,7 +208,7 @@ def parse_page(data: dict, key: str = "") -> Parsed:
     """data = dictionnaire renvoyé par le JS d'extraction (voir scraper.JS_GRAB)."""
     name = data.get("og_title") or data.get("h1") or data.get("title") or ""
     img = data.get("og_image")
-    price = currency = None
+    price = currency = seller = None
     in_stock = True
 
     for raw in data.get("jsonld") or []:
@@ -196,6 +234,8 @@ def parse_page(data: dict, key: str = "") -> Parsed:
                 continue
             price = p
             currency = offers.get("priceCurrency")
+            seller = offers.get("seller")
+            seller = seller.get("name") if isinstance(seller, dict) else seller
             name = n.get("name") or name
             im = n.get("image")
             img = (im[0] if isinstance(im, list) and im else im) or img
@@ -213,6 +253,10 @@ def parse_page(data: dict, key: str = "") -> Parsed:
         price = to_float(data.get("sel_price"))
         currency = currency or guess_currency(data.get("sel_price"))
 
+    if data.get("sel_seller"):
+        seller = data["sel_seller"]
+    if is_placeholder_price(price):
+        price = None
     if data.get("sel_title"):
         name = data["sel_title"]
     if data.get("sel_img"):
@@ -221,7 +265,8 @@ def parse_page(data: dict, key: str = "") -> Parsed:
         img = None
 
     return Parsed(name=" ".join(str(name).split())[:250], price=price,
-                  currency=currency, image=img, in_stock=in_stock)
+                  currency=currency, image=img, in_stock=in_stock,
+                  seller=" ".join(str(seller).split())[:80] if seller else None)
 
 
 def looks_blocked(data: dict) -> bool:
@@ -242,7 +287,7 @@ class Item:
 
 _AMT = r"(\d[\d \u00a0\u202f.,]*\d|\d)"
 _CUR = (r"(?:€|£|US ?\$|\$|EUR|USD|GBP|₦|NGN|KSh|Ksh|KES|EGP|E£|MAD|Dhs|DH|GH₵|GHS|"
-        r"FCFA|XOF)")
+        r"FCFA|XOF|AED|SAR|ZAR|CAD|AUD|CHF)")
 _SP = r"[ \u00a0\u202f]?"          # espace sur la MÊME ligne (jamais un saut de ligne)
 _PRICE_RE = re.compile(rf"(?:({_CUR}){_SP}{_AMT})|(?:{_AMT}{_SP}({_CUR}))")
 _NOISE_AFTER = re.compile(
@@ -277,7 +322,9 @@ def parse_listing_items(raw_items: list[dict]) -> list[Item]:
         for t in r.get("old") or []:
             amounts = extract_prices(t) or [(to_float(t), None)]
             old_vals += [v for v, _ in amounts if v]
-        current = [(v, c) for v, c in extract_prices(r.get("text")) if v not in old_vals]
+        old_vals = [v for v in old_vals if not is_placeholder_price(v)]
+        current = [(v, c) for v, c in extract_prices(r.get("text"))
+                   if v not in old_vals and not is_placeholder_price(v)]
         if not current:
             continue
         price, cur = current[0]

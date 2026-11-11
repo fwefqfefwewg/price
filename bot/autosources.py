@@ -33,12 +33,25 @@ CATEGORY_URL = {
     "aliexpress": re.compile(r"/category/\d+|/w/wholesale-", re.I),
     "jumia": re.compile(r"^/[a-z0-9-]+/?$", re.I),
     "alibaba": re.compile(r"/(?:Products|catalog|category|trade/search)", re.I),
+    "fnac": re.compile(r"/n\d+/", re.I),
+    "boulanger": re.compile(r"/c/[\w-]+", re.I),
+    "ldlc": re.compile(r"/c\d+/?$", re.I),
+    "ebay": re.compile(r"/(?:b|sch|e)/", re.I),
+    "walmart": re.compile(r"/(?:browse|cp|shop)/", re.I),
+    "bestbuy": re.compile(r"/site/(?:promo|searchpage|misc)|pcmcat\d+", re.I),
+    "temu": re.compile(r"/channel/|-(?:o|c)-\d+\.html", re.I),
+    "noon": re.compile(r"/[a-z]{2,3}-(?:en|ar)/[\w-]+/?$", re.I),
+    "takealot": re.compile(r"/(?:all|deals|promotions)", re.I),
+    "carrefour": re.compile(r"/(?:r|promotions)/", re.I),
 }
 
 # Points d'entrée explorés pour trouver des liens (les inconnus sont simplement ignorés).
 HUB_PATHS = {
     "amazon": ["/", "/deals", "/gp/bestsellers", "/gp/movers-and-shakers"],
     "jumia": ["/", "/flash-sales/"],
+    "ebay": ["/", "/deals"],
+    "walmart": ["/", "/shop/deals"],
+    "takealot": ["/", "/deals"],
 }
 
 SUBDOMAINS = {"www", "fr", "m", "es", "de", "it", "pt", "ar", "en", "uk"}

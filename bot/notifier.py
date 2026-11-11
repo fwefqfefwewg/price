@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiohttp
 
@@ -12,12 +12,68 @@ from .parsing import store_label
 
 log = logging.getLogger("notifier")
 SYMBOLS = {"EUR": "€", "USD": "$", "GBP": "£", "NGN": "₦", "KES": "KSh", "EGP": "E£",
-           "MAD": "MAD", "GHS": "GH₵", "XOF": "FCFA"}
+           "MAD": "MAD", "GHS": "GH₵", "XOF": "FCFA", "ZAR": "R", "AED": "AED", "SAR": "SAR",
+           "CAD": "C$", "AUD": "A$", "CHF": "CHF"}
+CONF_LABEL = {"high": "🟢 Élevée", "medium": "🟡 Moyenne", "low": "🔴 Faible"}
 
 
 def money(value: float, currency: str | None) -> str:
     sym = SYMBOLS.get((currency or "EUR").upper(), currency or "")
-    return f"{value:,.2f}".replace(",", " ").replace(".", ",") + f" {sym}".rstrip()
+    txt = f"{value:,.2f}".replace(",", "\u202f").replace(".", ",")
+    return f"{txt} {sym}".rstrip()
+
+
+def build_payload(brand: str, *, url, name, price, currency, ref, drop, image, reason,
+                  discovered=False, seller=None, confidence="low", samples=0) -> dict:
+    """Construit le message Discord (fonction pure, testable)."""
+    store, flag = store_label(url)
+    pct = round((drop or 0) * 100)
+    color = 0xE74C3C if pct >= 80 else 0xE67E22 if pct >= 65 else 0xF1C40F
+
+    price_line = f"💶 **{money(price, currency)}**"
+    lines = []
+    if ref:
+        price_line += f"   ~~{money(ref, currency)}~~"
+        lines.append(price_line)
+        lines.append(f"📉 **-{pct} %**  •  économie ≈ **{money(max(ref - price, 0), currency)}**")
+    else:
+        lines.append(price_line)
+    if confidence == "low":
+        lines.append("⚠️ Peu de recul sur ce prix : vérifie la fiche avant d'acheter.")
+
+    seller_txt = seller or store
+    if seller and store.lower() not in seller.lower():
+        seller_txt += " · vendeur tiers"
+    reliability = CONF_LABEL.get(confidence, CONF_LABEL["low"])
+    if samples:
+        reliability += f" ({samples} relevés)"
+
+    embed = {
+        "author": {"name": f"{brand} • ERREUR DE PRIX POSSIBLE"
+                   + (" • DÉCOUVERTE" if discovered else "")},
+        "title": (name or url)[:250],
+        "url": url,
+        "color": color,
+        "description": "\n".join(lines),
+        "fields": [
+            {"name": "🏪 Boutique", "value": f"{store} {flag}".strip(), "inline": True},
+            {"name": "🛒 Vendeur", "value": seller_txt[:100], "inline": True},
+            {"name": "✅ Fiabilité", "value": reliability, "inline": True},
+            {"name": "🔎 Détection", "value": reason or "—", "inline": False},
+            {"name": "🔗 Lien", "value": f"[Ouvrir l'offre]({url})", "inline": False},
+        ],
+        "footer": {"text": f"Powered by {brand}"},
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if image and image.startswith("http"):
+        embed["thumbnail"] = {"url": image}
+
+    # le texte hors embed sert d'aperçu dans la notification du téléphone
+    preview = "🚨 **ALERTE & DÉTECTION PAR NOTRE BOT**"
+    if ref:
+        preview += f" • -{pct} %"
+    preview += f" • {(name or store)[:60]} • {money(price, currency)}"
+    return {"content": preview, "embeds": [embed]}
 
 
 class Notifier:
@@ -44,31 +100,8 @@ class Notifier:
                 await asyncio.sleep(2)
         return False
 
-    async def send_alert(self, *, url, name, price, currency, ref, drop, image, reason,
-                         discovered=False) -> bool:
-        store, flag = store_label(url)
-        price_txt = f"**{money(price, currency)}**"
-        if ref:
-            price_txt += f"\n~~{money(ref, currency)}~~  •  **-{round((drop or 0) * 100)} %**"
-        embed = {
-            "author": {"name": f"{self.cfg.brand} • ERREUR DE PRIX POSSIBLE"
-                       + (" • DÉCOUVERTE" if discovered else "")},
-            "title": (name or url)[:250],
-            "url": url,
-            "color": 0xE74C3C,
-            "fields": [
-                {"name": "Store", "value": f"{store} {flag}".strip(), "inline": True},
-                {"name": "Vendor", "value": store, "inline": True},
-                {"name": "Price", "value": price_txt, "inline": False},
-            ],
-            "footer": {"text": f"Powered by {self.cfg.brand} | {datetime.now():%d/%m/%Y %H:%M}"},
-        }
-        if discovered and reason:
-            embed["fields"].append({"name": "Détection", "value": reason, "inline": False})
-        if image and image.startswith("http"):
-            embed["thumbnail"] = {"url": image}
-        return await self._post(self.cfg.webhook, {
-            "content": "🚨 **ALERTE & DÉTECTION PAR NOTRE BOT**", "embeds": [embed]})
+    async def send_alert(self, **kw) -> bool:
+        return await self._post(self.cfg.webhook, build_payload(self.cfg.brand, **kw))
 
     async def send_admin(self, text: str):
         url = self.cfg.admin_webhook
